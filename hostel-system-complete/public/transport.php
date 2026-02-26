@@ -3,6 +3,7 @@ require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../app/models/Transport.php';
 require_once __DIR__ . '/../app/models/Rider.php';
+require_once __DIR__ . '/../app/models/Location.php';
 
 requireLogin();
 
@@ -68,19 +69,36 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && (!isset($_POST['action']) || $_POST[
     $pickup = sanitize($_POST['pickup']);
     $destination = sanitize($_POST['destination']);
     
-    $distance = rand(1, 10);
-    $cost = $distance * 500;
+    // Calculate real distance and fare using SafeBoda pricing
+    $transportCost = Location::calculateTransportCost($pickup, $destination);
+    $distance = $transportCost['distance'];
+    $cost = $transportCost['cost'];
     
     $result = $transportModel->create($_SESSION['user_id'], $pickup, $destination, $cost);
     if ($result) {
-        $success = 'Ride request submitted! Estimated Cost: UGX ' . number_format($cost, 0) . '. A rider will confirm shortly.';
+        $success = 'Ride request submitted! Distance: ' . $distance . ' km | Estimated Cost: UGX ' . number_format($cost, 0) . '. A rider will confirm shortly.';
     } else {
         $error = 'Failed to submit request. Please try again.';
     }
 }
 
-// Get user's ride history
-$myRides = $transportModel->getByUser($_SESSION['user_id']);
+// Get user's ride history with assigned rider details
+$query = "SELECT t.*, 
+          COALESCE(u_rider.name, t.rider_name) as rider_name, 
+          r.location as rider_location,
+          r.rating as rider_rating,
+          r.total_rides as rider_total_rides,
+          u_customer.name as user_name 
+          FROM transport t 
+          LEFT JOIN users u_customer ON t.user_id = u_customer.id
+          LEFT JOIN riders r ON t.rider_id = r.id
+          LEFT JOIN users u_rider ON r.user_id = u_rider.id
+          WHERE t.user_id = :user_id
+          ORDER BY t.created_at DESC";
+$stmt = $db->prepare($query);
+$stmt->bindParam(':user_id', $_SESSION['user_id']);
+$stmt->execute();
+$myRides = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 require_once __DIR__ . '/../includes/header.php';
 ?>
@@ -109,7 +127,7 @@ require_once __DIR__ . '/../includes/header.php';
 
                     <div class="alert alert-info">
                         <i class="fas fa-info-circle"></i> Our transport service connects you with reliable riders for quick and safe trips.
-                        <br><strong>Rate:</strong> UGX 250 per km
+                        <br>
                         <br><strong>Available Riders:</strong> <?php echo count($availableRiders); ?> | <strong>Pending Requests:</strong> <span class="badge bg-warning"><?php echo $pendingCount; ?></span>
                     </div>
 
@@ -165,10 +183,88 @@ require_once __DIR__ . '/../includes/header.php';
                 </div>
             </div>
 
-            <?php if (!empty($myRides)): ?>
+            <?php 
+            // Separate assigned/pending rides from completed/cancelled
+            $activeRides = array_filter($myRides, function($r) { return in_array($r['status'], ['pending', 'assigned']); });
+            $pastRides = array_filter($myRides, function($r) { return in_array($r['status'], ['completed', 'cancelled']); });
+            ?>
+            
+            <?php if (!empty($activeRides)): ?>
+                <div class="card mt-4 border-info">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0"><i class="fas fa-motorcycle"></i> Active Rides</h5>
+                    </div>
+                    <div class="card-body">
+                        <?php foreach ($activeRides as $ride): ?>
+                            <div class="card mb-3 <?php echo $ride['status'] == 'assigned' ? 'border-success' : 'border-warning'; ?>">
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <h6><i class="fas fa-map-pin"></i> <strong>Route</strong></h6>
+                                            <p class="mb-1"><strong>From:</strong> <?php echo htmlspecialchars($ride['pickup_location']); ?></p>
+                                            <p class="mb-2"><strong>To:</strong> <?php echo htmlspecialchars($ride['destination']); ?></p>
+                                            <?php 
+                                                $rideDistance = Location::calculateDistance($ride['pickup_location'], $ride['destination']);
+                                                $rideCost = Location::calculateFare($rideDistance);
+                                            ?>
+                                            <p class="mb-0">
+                                                <strong>Distance:</strong> <span class="badge bg-primary"><?php echo $rideDistance; ?> km</span>
+                                                <strong>Cost:</strong> <span class="badge bg-success">UGX <?php echo number_format($rideCost, 0); ?></span>
+                                            </p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <h6><i class="fas fa-info-circle"></i> <strong>Status</strong></h6>
+                                            <p class="mb-1">
+                                                <span class="badge bg-<?php echo $ride['status'] == 'assigned' ? 'success' : 'warning'; ?>" style="font-size: 0.9rem;">
+                                                    <?php echo ucfirst($ride['status']); ?>
+                                                </span>
+                                            </p>
+                                            <p class="text-muted"><small>Requested: <?php echo date('H:i, M d', strtotime($ride['created_at'])); ?></small></p>
+                                        </div>
+                                    </div>
+                                    
+                                    <?php if ($ride['status'] == 'assigned' && !empty($ride['rider_name'])): ?>
+                                        <hr>
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <h6><i class="fas fa-user"></i> <strong>Boda Driver</strong></h6>
+                                                <p class="mb-1"><strong>Name:</strong> <?php echo htmlspecialchars($ride['rider_name']); ?></p>
+                                                <p class="mb-1"><strong>Rating:</strong> ⭐ <?php echo $ride['rider_rating'] ?? 'N/A'; ?>/5.0</p>
+                                                <p class="mb-0"><strong>Total Rides:</strong> <?php echo $ride['rider_total_rides'] ?? 0; ?></p>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <h6><i class="fas fa-map-marker-alt"></i> <strong>Tracking</strong></h6>
+                                                <p class="mb-1"><strong>Current Location:</strong> <?php echo htmlspecialchars($ride['rider_location'] ?? 'Updating...'); ?></p>
+                                                <p class="mb-0"><strong>Est. Arrival:</strong> <span class="badge bg-info">~<?php echo rand(3, 12); ?> mins</span></p>
+                                            </div>
+                                        </div>
+                                    <?php else: ?>
+                                        <hr>
+                                        <div class="alert alert-warning mb-0">
+                                            <i class="fas fa-clock"></i> Waiting for a rider to accept your request...
+                                        </div>
+                                    <?php endif; ?>
+                                    
+                                    <div class="mt-3">
+                                        <?php if (!in_array($ride['status'], ['completed','cancelled'])): ?>
+                                            <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this ride?');">
+                                                <input type="hidden" name="action" value="cancel_ride">
+                                                <input type="hidden" name="ride_id" value="<?php echo intval($ride['id']); ?>">
+                                                <button type="submit" class="btn btn-sm btn-danger"><i class="fas fa-times"></i> Cancel</button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+            
+            <?php if (!empty($pastRides)): ?>
             <div class="card mt-4">
                 <div class="card-header">
-                    <h5 class="mb-0"><i class="fas fa-history"></i> Your Ride History</h5>
+                    <h5 class="mb-0"><i class="fas fa-history"></i> Ride History</h5>
                 </div>
                 <div class="card-body">
                     <div class="table-responsive">
@@ -177,35 +273,29 @@ require_once __DIR__ . '/../includes/header.php';
                                 <tr>
                                     <th>From</th>
                                     <th>To</th>
+                                    <th>Distance</th>
                                     <th>Cost</th>
                                     <th>Status</th>
                                     <th>Date</th>
-                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach (array_slice($myRides, 0, 5) as $ride): ?>
+                                <?php foreach ($pastRides as $ride): ?>
                                 <tr>
                                     <td><small><?php echo htmlspecialchars(substr($ride['pickup_location'], 0, 20)); ?></small></td>
                                     <td><small><?php echo htmlspecialchars(substr($ride['destination'], 0, 20)); ?></small></td>
+                                    <td>
+                                        <small>
+                                            <?php echo Location::calculateDistance($ride['pickup_location'], $ride['destination']); ?> km
+                                        </small>
+                                    </td>
                                     <td><strong>UGX <?php echo number_format($ride['cost'], 0); ?></strong></td>
                                     <td>
-                                        <span class="badge bg-<?php echo $ride['status'] == 'completed' ? 'success' : ($ride['status'] == 'assigned' ? 'info' : 'warning'); ?>">
+                                        <span class="badge bg-<?php echo $ride['status'] == 'completed' ? 'success' : 'secondary'; ?>">
                                             <?php echo ucfirst($ride['status']); ?>
                                         </span>
                                     </td>
                                     <td><small><?php echo date('M d', strtotime($ride['created_at'])); ?></small></td>
-                                    <td>
-                                        <?php if (!in_array($ride['status'], ['completed','cancelled'])): ?>
-                                            <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this ride?');">
-                                                <input type="hidden" name="action" value="cancel_ride">
-                                                <input type="hidden" name="ride_id" value="<?php echo intval($ride['id']); ?>">
-                                                <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
-                                            </form>
-                                        <?php else: ?>
-                                            <small class="text-muted">—</small>
-                                        <?php endif; ?>
-                                   </td>
                                 </tr>
                                 <?php endforeach; ?>
                             </tbody>
