@@ -101,6 +101,9 @@ $stmt->execute();
 $myRides = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 require_once __DIR__ . '/../includes/header.php';
+// Leaflet (OpenStreetMap) - simple map preview for rider tracking
+echo '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />';
+echo '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>';
 ?>
 
 <div class="container-fluid">
@@ -234,7 +237,8 @@ require_once __DIR__ . '/../includes/header.php';
                                             </div>
                                             <div class="col-md-6">
                                                 <h6><i class="fas fa-map-marker-alt"></i> <strong>Tracking</strong></h6>
-                                                <p class="mb-1"><strong>Current Location:</strong> <?php echo htmlspecialchars($ride['rider_location'] ?? 'Updating...'); ?></p>
+                                                <div id="map-ride-<?php echo intval($ride['id']); ?>" style="height:200px; border:1px solid #ddd; border-radius:4px;"></div>
+                                                <p class="mb-1 mt-2"><strong>Current Location:</strong> <span id="loc-text-<?php echo intval($ride['id']); ?>"><?php echo htmlspecialchars($ride['rider_location'] ?? 'Updating...'); ?></span></p>
                                                 <p class="mb-0"><strong>Est. Arrival:</strong> <span class="badge bg-info">~<?php echo rand(3, 12); ?> mins</span></p>
                                             </div>
                                         </div>
@@ -307,5 +311,57 @@ require_once __DIR__ . '/../includes/header.php';
         </div>
     </div>
 </div>
+
+<script>
+// Initialize map and poll for rider location
+function initRideMap(transportId, mapId, locTextId) {
+    try {
+        var map = L.map(mapId).setView([<?php echo Location::KAMPALA_CENTER_LAT; ?>, <?php echo Location::KAMPALA_CENTER_LON; ?>], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        var marker = null;
+
+        function update() {
+            fetch('get_rider_location.php?transport_id=' + transportId)
+                .then(function(res){ return res.json(); })
+                .then(function(data){
+                    if (data && !data.error) {
+                        var lat = parseFloat(data.lat);
+                        var lon = parseFloat(data.lon);
+                        if (!isNaN(lat) && !isNaN(lon)) {
+                            if (!marker) {
+                                marker = L.marker([lat, lon]).addTo(map);
+                                map.setView([lat, lon], 14);
+                            } else {
+                                marker.setLatLng([lat, lon]);
+                            }
+                        }
+                        if (document.getElementById(locTextId)) {
+                            document.getElementById(locTextId).textContent = data.name || (lat + ', ' + lon);
+                        }
+                    }
+                })
+                .catch(function(e){
+                    // console.warn('location fetch error', e);
+                });
+        }
+
+        // initial
+        update();
+        // poll every 6 seconds
+        setInterval(update, 6000);
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+// Initialize maps for assigned rides
+<?php foreach ($activeRides as $ar): if ($ar['status'] == 'assigned'): ?>
+initRideMap(<?php echo intval($ar['id']); ?>, 'map-ride-<?php echo intval($ar['id']); ?>', 'loc-text-<?php echo intval($ar['id']); ?>');
+<?php endif; endforeach; ?>
+</script>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
