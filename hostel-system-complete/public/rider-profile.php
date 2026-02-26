@@ -119,6 +119,15 @@ require_once __DIR__ . '/../includes/header.php';
                             <i class="fas fa-save"></i> 
                             <?php echo $rider ? 'Update Profile' : 'Create Profile'; ?>
                         </button>
+                        <?php if ($rider): ?>
+                        <button type="button" id="start-tracking" class="btn btn-success ms-2">
+                            <i class="fas fa-location-arrow"></i> Start Live Tracking
+                        </button>
+                        <button type="button" id="stop-tracking" class="btn btn-secondary ms-2" style="display:none;">
+                            <i class="fas fa-stop"></i> Stop Tracking
+                        </button>
+                        <div id="tracking-status" class="mt-2 text-muted"></div>
+                        <?php endif; ?>
                     </form>
                 </div>
             </div>
@@ -150,3 +159,51 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+<?php if ($rider): ?>
+<script>
+let watchId = null;
+const startBtn = document.getElementById('start-tracking');
+const stopBtn = document.getElementById('stop-tracking');
+const statusEl = document.getElementById('tracking-status');
+
+function sendLocation(lat, lon) {
+    fetch('update_rider_location.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: lat, lon: lon }),
+        credentials: 'same-origin'
+    }).then(r=>r.json()).then(j=>{
+        if (j.success) {
+            statusEl.textContent = 'Location updated: ' + lat.toFixed(5) + ', ' + lon.toFixed(5);
+        } else if (j.error) {
+            statusEl.textContent = 'Update error: ' + j.error;
+        }
+    }).catch(e=>{
+        statusEl.textContent = 'Network error while updating location';
+    });
+}
+
+startBtn.addEventListener('click', function(){
+    if (!navigator.geolocation) { statusEl.textContent = 'Geolocation not supported in this browser.'; return; }
+    statusEl.textContent = 'Starting live tracking...';
+    watchId = navigator.geolocation.watchPosition(function(pos){
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        sendLocation(lat, lon);
+    }, function(err){
+        statusEl.textContent = 'Geolocation error: ' + err.message;
+    }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'inline-block';
+});
+
+stopBtn.addEventListener('click', function(){
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    statusEl.textContent = 'Live tracking stopped.';
+    startBtn.style.display = 'inline-block';
+    stopBtn.style.display = 'none';
+});
+</script>
+<?php endif; ?>
