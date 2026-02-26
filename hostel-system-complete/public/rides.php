@@ -23,20 +23,7 @@ if (!$rider) {
 $success = '';
 $error = '';
 
-// Get all pending rides (not assigned yet)
-$pending_rides = $transportModel->getPending();
-
-// Get rides assigned to this rider
-$query = "SELECT t.*, u.name as user_name, u.phone as user_phone 
-          FROM transport t
-          JOIN users u ON t.user_id = u.id
-          WHERE t.rider_id = :rider_id
-          ORDER BY t.created_at DESC";
-
-$stmt = $db->prepare($query);
-$stmt->bindParam(':rider_id', $rider['id']);
-$stmt->execute();
-$my_rides = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// We'll fetch pending rides and "my rides" after handling any POST actions
 
 // Handle accept ride
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
@@ -44,7 +31,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
     
     if ($_POST['action'] == 'accept') {
         if ($transportModel->assignToRider($transport_id, $rider['id'])) {
-            $success = 'Ride accepted! You are now assigned to this request.';
+            // fetch passenger name and phone for this transport
+            $pquery = "SELECT u.name as user_name, u.phone as user_phone
+                       FROM transport t
+                       JOIN users u ON t.user_id = u.id
+                       WHERE t.id = :id LIMIT 1";
+            $pstmt = $db->prepare($pquery);
+            $pstmt->bindParam(':id', $transport_id);
+            if ($pstmt->execute()) {
+                $prow = $pstmt->fetch(PDO::FETCH_ASSOC);
+                $pname = isset($prow['user_name']) ? htmlspecialchars($prow['user_name']) : 'Passenger';
+                $pphone = isset($prow['user_phone']) ? htmlspecialchars($prow['user_phone']) : 'N/A';
+                $success = 'Ride accepted! You are now assigned to this request. Passenger: ' . $pname . ' (' . $pphone . ')';
+            } else {
+                $success = 'Ride accepted! You are now assigned to this request.';
+            }
         } else {
             $error = 'Failed to accept ride. It may have been taken by another rider.';
         }
@@ -64,6 +65,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
         }
     }
 }
+
+// Get all pending rides (not assigned yet)
+$pending_rides = $transportModel->getPending();
+
+// Get rides assigned to this rider (show student info here)
+$query = "SELECT t.*, u.name as user_name, u.phone as user_phone 
+          FROM transport t
+          JOIN users u ON t.user_id = u.id
+          WHERE t.rider_id = :rider_id
+          ORDER BY t.created_at DESC";
+
+$stmt = $db->prepare($query);
+$stmt->bindParam(':rider_id', $rider['id']);
+$stmt->execute();
+$my_rides = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 require_once __DIR__ . '/../includes/header.php';
 ?>
@@ -125,8 +141,8 @@ require_once __DIR__ . '/../includes/header.php';
                                     </div>
                                     
                                     <div class="mb-3 bg-light p-2 rounded">
-                                        <p class="mb-1"><strong>Passenger:</strong> <?php echo htmlspecialchars($ride['user_name']); ?></p>
-                                        <p class="mb-1"><strong>Phone:</strong> <?php echo htmlspecialchars($ride['user_phone']); ?></p>
+                                        <p class="mb-1"><strong>Passenger:</strong> Hidden until you accept the ride</p>
+                                        <p class="mb-1"><strong>Phone:</strong> Hidden</p>
                                         <p class="mb-0"><strong>Cost:</strong> <span class="badge bg-success">UGX <?php echo number_format($ride['cost'], 0); ?></span></p>
                                     </div>
                                     
