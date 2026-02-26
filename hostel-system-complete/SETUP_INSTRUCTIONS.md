@@ -14,7 +14,7 @@ Complete Hostel Management System with PHP 8.2 backend, PostgreSQL database, and
 
 #### A. Database Setup
 ```bash
-# Create a PostgreSQL database
+# Create a mySQL database
 createdb hostel_system
 
 # Restore the database with sample data
